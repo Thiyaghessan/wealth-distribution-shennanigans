@@ -68,11 +68,11 @@ def server(input, output, session):
             return None
 
         fig, ax = plt.subplots(figsize=(8, 5))
-        ax.hist(gini_values, bins=10, range=(0, 100), rwidth=0.8, color='steelblue', edgecolor='white')
+        ax.hist(gini_values, bins=10, range=(0, 60), rwidth=0.8, color='steelblue', edgecolor='white')
         ax.set_xlabel('Gini Coefficient')
         ax.set_ylabel('Frequency')
         ax.set_title('Distribution of Gini Coefficients')
-        ax.set_xlim(0, 1)
+        ax.set_xlim(0, 50)
         return fig
 
     @output
