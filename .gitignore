@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+docs/
+_site/
+
+**/*.quarto_ipynb
