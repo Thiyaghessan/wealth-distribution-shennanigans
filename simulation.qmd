@@ -1,0 +1,91 @@
+---
+title: "Wealth Distribution Simulation"
+format:
+  html:
+    page-layout: full
+filters:
+  - shinylive
+---
+
+```{shinylive-python}
+#| standalone: true
+#| viewerHeight: 600
+
+from shiny import App, ui, render, reactive
+import numpy as np
+import matplotlib.pyplot as plt
+from io import BytesIO
+import base64
+
+app_ui = ui.page_fluid(
+    ui.h2("Wealth Distribution Simulation"),
+    ui.layout_sidebar(
+        ui.sidebar(
+            ui.input_slider("population", "Population Size", min=10, max=100, value=20),
+            ui.input_slider("initial_units", "Initial Units per Person", min=1, max=50, value=10),
+            ui.input_slider("days", "Days to Simulate", min=100, max=5000, value=1000, step=100),
+            ui.input_slider("runs", "Number of Runs", min=1, max=50, value=10),
+            ui.input_action_button("run_sim", "Run Simulation", class_="btn-primary"),
+        ),
+        ui.output_plot("gini_hist"),
+        ui.output_text_verbatim("stats"),
+    ),
+)
+
+def server(input, output, session):
+    @reactive.calc
+    @reactive.event(input.run_sim)
+    def run_simulation():
+        pop_size = input.population()
+        initial = input.initial_units()
+        num_days = input.days()
+        num_runs = input.runs()
+
+        gini_values = []
+
+        for run in range(num_runs):
+            population = np.full(pop_size, initial, dtype=float)
+
+            for day in range(num_days):
+                i, j = np.random.choice(len(population), 2, replace=False)
+                if population[i] > 0:
+                    amount = np.random.randint(1, int(population[i]) + 1)
+                    population[i] -= amount
+                    population[j] += amount
+
+            # Calculate Gini coefficient
+            gini = (np.sum(np.abs(np.subtract.outer(population, population))) /
+                    (2 * len(population) * np.mean(population)))
+            gini_values.append(gini)
+
+        return gini_values
+
+    @output
+    @render.plot
+    def gini_hist():
+        gini_values = run_simulation()
+        if gini_values is None:
+            return None
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.hist(gini_values, bins=10, range=(0, 1), rwidth=0.8, color='steelblue', edgecolor='white')
+        ax.set_xlabel('Gini Coefficient')
+        ax.set_ylabel('Frequency')
+        ax.set_title('Distribution of Gini Coefficients')
+        ax.set_xlim(0, 1)
+        return fig
+
+    @output
+    @render.text
+    def stats():
+        gini_values = run_simulation()
+        if gini_values is None:
+            return "Click 'Run Simulation' to start"
+
+        return (f"Mean Gini: {np.mean(gini_values):.3f}\n"
+                f"Std Dev:   {np.std(gini_values):.3f}\n"
+                f"Min:       {np.min(gini_values):.3f}\n"
+                f"Max:       {np.max(gini_values):.3f}")
+
+app = App(app_ui, server)
+```
