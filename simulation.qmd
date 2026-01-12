@@ -7,6 +7,16 @@ filters:
   - shinylive
 ---
 
+## The Model
+
+This simulation explores how wealth becomes distributed in a population through random exchanges. The model is simple:
+
+1. Everyone starts with **equal wealth** (the same number of units)
+2. Each day, two people are randomly selected and one gives a random portion of their wealth to the other
+3. This process repeats for many days
+
+The only rule is that you cannot give more than you have. There is no skill, no earning, no interest—just random transactions between equals.
+
 ```{shinylive-python}
 #| standalone: true
 #| viewerHeight: 600
@@ -27,7 +37,7 @@ app_ui = ui.page_fluid(
             ui.input_slider("runs", "Number of Runs", min=1, max=50, value=10),
             ui.input_action_button("run_sim", "Run Simulation", class_="btn-primary"),
         ),
-        ui.output_plot("gini_hist"),
+        ui.output_plot("wealth_dist"),
         ui.output_text_verbatim("stats"),
     ),
 )
@@ -42,6 +52,7 @@ def server(input, output, session):
         num_runs = input.runs()
 
         gini_values = []
+        final_populations = []
 
         for run in range(num_runs):
             population = np.full(pop_size, initial, dtype=float)
@@ -55,33 +66,48 @@ def server(input, output, session):
 
             # Calculate Gini coefficient
             gini = (np.sum(np.abs(np.subtract.outer(population, population))) /
-                    (2 * len(population) * np.mean(population)))
+                    (2 * len(population)**2 * np.mean(population)))
             gini_values.append(gini)
+            final_populations.append(np.sort(population))
 
-        return gini_values
+        return {"gini": gini_values, "populations": final_populations}
 
     @output
     @render.plot
-    def gini_hist():
-        gini_values = run_simulation()
-        if gini_values is None:
+    def wealth_dist():
+        result = run_simulation()
+        if result is None:
             return None
 
+        populations = np.array(result["populations"])
         fig, ax = plt.subplots(figsize=(8, 5))
-        ax.hist(gini_values, bins=10, range=(0, 50), rwidth=0.8, color='steelblue', edgecolor='white')
-        ax.set_xlabel('Gini Coefficient')
-        ax.set_ylabel('Frequency')
-        ax.set_title('Distribution of Gini Coefficients')
-        ax.set_xlim(0, 50)
+
+        x = np.arange(1, populations.shape[1] + 1)
+        mean_wealth = np.mean(populations, axis=0)
+        min_wealth = np.min(populations, axis=0)
+        max_wealth = np.max(populations, axis=0)
+
+        ax.fill_between(x, min_wealth, max_wealth,
+                        alpha=0.3, color='steelblue', label='Min-Max range')
+        ax.plot(x, mean_wealth, color='steelblue', linewidth=2, marker='o',
+                markersize=5, label='Mean')
+
+        ax.set_xlabel('Person (sorted by wealth)')
+        ax.set_ylabel('Wealth')
+        ax.set_title('Final Wealth Distribution (mean with min-max range)')
+        ax.set_xlim(0, populations.shape[1] + 1)
+        ax.set_ylim(bottom=0)
+        ax.legend()
         return fig
 
     @output
     @render.text
     def stats():
-        gini_values = run_simulation()
-        if gini_values is None:
+        result = run_simulation()
+        if result is None:
             return "Click 'Run Simulation' to start"
 
+        gini_values = result["gini"]
         return (f"Mean Gini: {np.mean(gini_values):.3f}\n"
                 f"Std Dev:   {np.std(gini_values):.3f}\n"
                 f"Min:       {np.min(gini_values):.3f}\n"
@@ -89,3 +115,460 @@ def server(input, output, session):
 
 app = App(app_ui, server)
 ```
+
+## What the Results Show
+
+Despite starting from perfect equality, the simulation consistently produces significant wealth inequality. A few key observations:
+
+- **Inequality emerges naturally**: Even with purely random exchanges between equals, wealth concentrates into fewer hands over time.
+- **The poor stay poor**: Those who fall behind early tend to stay behind—they have less to give, so they can only lose small amounts, but they can receive large amounts from the wealthy (which is rare).
+- **High variance at the top**: The shaded region shows that outcomes for the wealthiest vary dramatically between runs, while outcomes for the poorest are consistently near zero.
+- **The Gini coefficient** quantifies inequality on a scale from 0 (perfect equality) to 1 (one person has everything). This simulation typically produces Gini values of 0.4–0.6, comparable to many real-world economies.
+
+This model, sometimes called the "yard sale model," demonstrates that inequality can arise from random chance alone, without differences in skill, effort, or opportunity.
+
+### Why Does This Happen?
+
+The key insight is **asymmetric risk**. Consider a transaction between a rich person (wealth $W_R$) and a poor person (wealth $W_P$):
+
+- The poor person can lose *at most* $W_P$
+- The rich person can lose *at most* $W_R$
+
+Since the amount transferred is proportional to the giver's wealth, the poor person's potential losses are capped at a small number, while potential gains (receiving from the rich) are rare events. Over many transactions, this asymmetry compounds.
+
+Mathematically, this resembles a **random walk with absorbing barriers**. Once someone approaches zero wealth, they become "trapped"—they can only receive small amounts (when they happen to be the recipient) but can never lose much. Meanwhile, wealth accumulates through a process similar to **preferential attachment**: those with more have more to exchange, making them more likely to be involved in large transfers.
+
+The stationary distribution of this process is approximately **exponential**:
+
+$$P(W) \propto e^{-W/\langle W \rangle}$$
+
+where $\langle W \rangle$ is the average wealth. This means most people cluster near zero while a few accumulate large amounts—a distribution that emerges purely from random dynamics, not from any inherent differences between agents.
+
+## Growing Economy Model
+
+The model above assumes a closed system where total wealth is fixed. Real economies grow. This second simulation adds two growth mechanisms:
+
+1. **Labor Income**: Each day, every person earns a random amount (0 to max labor income). This models wages and productivity.
+2. **Capital Returns**: Each day, wealth grows by a percentage. This models interest, dividends, and investment returns.
+
+Random exchanges still occur alongside these mechanisms, modeling spending and trade.
+
+```{shinylive-python}
+#| standalone: true
+#| viewerHeight: 600
+
+from shiny import App, ui, render, reactive
+import numpy as np
+import matplotlib.pyplot as plt
+
+app_ui = ui.page_fluid(
+    ui.h2("Growing Economy Simulation"),
+    ui.layout_sidebar(
+        ui.sidebar(
+            ui.input_slider("population", "Population Size", min=10, max=100, value=20),
+            ui.input_slider("initial_units", "Initial Units per Person", min=1, max=50, value=10),
+            ui.input_slider("days", "Days to Simulate", min=100, max=5000, value=1000, step=100),
+            ui.input_slider("runs", "Number of Runs", min=1, max=50, value=10),
+            ui.input_slider("labor_income", "Max Daily Labor Income", min=0, max=5, value=1, step=0.5),
+            ui.input_slider("capital_return", "Daily Capital Return (%)", min=0.0, max=1.0, value=0.1, step=0.05),
+            ui.input_action_button("run_sim", "Run Simulation", class_="btn-primary"),
+        ),
+        ui.output_plot("wealth_dist"),
+        ui.output_text_verbatim("stats"),
+    ),
+)
+
+def server(input, output, session):
+    @reactive.calc
+    @reactive.event(input.run_sim)
+    def run_simulation():
+        pop_size = input.population()
+        initial = input.initial_units()
+        num_days = input.days()
+        num_runs = input.runs()
+        max_labor = input.labor_income()
+        capital_rate = input.capital_return() / 100
+
+        gini_values = []
+        final_populations = []
+
+        for run in range(num_runs):
+            population = np.full(pop_size, initial, dtype=float)
+
+            for day in range(num_days):
+                # Labor income: everyone earns random amount
+                if max_labor > 0:
+                    population += np.random.uniform(0, max_labor, pop_size)
+
+                # Capital returns: wealth grows by percentage
+                if capital_rate > 0:
+                    population *= (1 + capital_rate)
+
+                # Random exchange (same as before)
+                i, j = np.random.choice(len(population), 2, replace=False)
+                if population[i] > 0:
+                    amount = np.random.uniform(0, population[i])
+                    population[i] -= amount
+                    population[j] += amount
+
+            # Calculate Gini coefficient
+            gini = (np.sum(np.abs(np.subtract.outer(population, population))) /
+                    (2 * len(population)**2 * np.mean(population)))
+            gini_values.append(gini)
+            final_populations.append(np.sort(population))
+
+        return {"gini": gini_values, "populations": final_populations}
+
+    @output
+    @render.plot
+    def wealth_dist():
+        result = run_simulation()
+        if result is None:
+            return None
+
+        populations = np.array(result["populations"])
+        fig, ax = plt.subplots(figsize=(8, 5))
+
+        x = np.arange(1, populations.shape[1] + 1)
+        mean_wealth = np.mean(populations, axis=0)
+        min_wealth = np.min(populations, axis=0)
+        max_wealth = np.max(populations, axis=0)
+
+        ax.fill_between(x, min_wealth, max_wealth,
+                        alpha=0.3, color='darkorange', label='Min-Max range')
+        ax.plot(x, mean_wealth, color='darkorange', linewidth=2, marker='o',
+                markersize=5, label='Mean')
+
+        ax.set_xlabel('Person (sorted by wealth)')
+        ax.set_ylabel('Wealth')
+        ax.set_title('Final Wealth Distribution (mean with min-max range)')
+        ax.set_xlim(0, populations.shape[1] + 1)
+        ax.set_ylim(bottom=0)
+        ax.legend()
+        return fig
+
+    @output
+    @render.text
+    def stats():
+        result = run_simulation()
+        if result is None:
+            return "Click 'Run Simulation' to start"
+
+        gini_values = result["gini"]
+        populations = np.array(result["populations"])
+        total_wealth = np.mean(np.sum(populations, axis=1))
+        return (f"Mean Gini:     {np.mean(gini_values):.3f}\n"
+                f"Gini Std Dev:  {np.std(gini_values):.3f}\n"
+                f"Total Wealth:  {total_wealth:.0f}")
+
+app = App(app_ui, server)
+```
+
+### Why Growth Changes the Dynamics
+
+The growing economy model introduces two competing forces:
+
+**Labor Income (Additive Growth)**
+
+Each day, every person receives income $L$ drawn uniformly from $[0, L_{max}]$:
+
+$$W_i(t+1) = W_i(t) + L_i$$
+
+This is **equalizing** because everyone receives roughly the same absolute amount regardless of current wealth. A poor person gaining 2 units doubles their wealth; a rich person gaining 2 units barely notices.
+
+**Capital Returns (Multiplicative Growth)**
+
+Wealth grows by a percentage $r$ each day:
+
+$$W_i(t+1) = W_i(t) \times (1 + r)$$
+
+This is **concentrating** because gains are proportional to existing wealth. After $t$ days, someone starting with $W_0$ has:
+
+$$W(t) = W_0 \times (1 + r)^t$$
+
+The ratio between a rich and poor person *grows exponentially* over time. This is the mathematical basis of "the rich get richer."
+
+**The Balance**
+
+The final distribution depends on the ratio of these effects:
+
+- **High labor income, low returns**: The additive term dominates, inequality stays moderate, nobody hits zero
+- **Low labor income, high returns**: The multiplicative term dominates, inequality explodes
+- **Balanced**: The Gini coefficient stabilizes at some intermediate value
+
+This explains why policies like minimum wage (additive) vs. capital gains tax cuts (multiplicative) have different effects on inequality. The model shows that *growth alone doesn't reduce inequality*—the structure of how growth is distributed matters enormously.
+
+## Economy with Firms
+
+This model introduces firms as economic actors. The mechanics:
+
+1. **Firm Formation**: With some probability, an agent borrows capital from others and starts a firm
+2. **Production**: Firms hire workers and pay wages, then produce goods
+3. **Consumption**: People buy goods from firms if they can afford them
+4. **Debt Service**: Firms pay interest to their lenders
+5. **Profit/Loss**: Revenue minus costs goes to the owner (or comes from owner's wealth if negative)
+6. **Failure**: If an owner can't cover losses, the firm fails—workers become unemployed, lenders lose their principal
+
+```{shinylive-python}
+#| standalone: true
+#| viewerHeight: 700
+
+from shiny import App, ui, render, reactive
+import numpy as np
+import matplotlib.pyplot as plt
+
+app_ui = ui.page_fluid(
+    ui.h2("Economy with Firms"),
+    ui.layout_sidebar(
+        ui.sidebar(
+            ui.input_slider("population", "Population Size", min=10, max=100, value=30),
+            ui.input_slider("initial_units", "Initial Units per Person", min=1, max=100, value=50),
+            ui.input_slider("days", "Days to Simulate", min=100, max=2000, value=500, step=100),
+            ui.input_slider("runs", "Number of Runs", min=1, max=20, value=5),
+            ui.hr(),
+            ui.h5("Firm Parameters"),
+            ui.input_slider("firm_prob", "Firm Formation Probability (%)", min=0, max=10, value=2, step=0.5),
+            ui.input_slider("startup_capital", "Startup Capital Required", min=10, max=200, value=50),
+            ui.input_slider("interest_rate", "Daily Interest Rate (%)", min=0, max=5, value=1, step=0.25),
+            ui.input_slider("wage_rate", "Daily Wage", min=1, max=20, value=5),
+            ui.input_slider("workers_per_firm", "Workers per Firm", min=1, max=10, value=3),
+            ui.input_slider("good_price", "Price of Goods", min=1, max=20, value=8),
+            ui.input_action_button("run_sim", "Run Simulation", class_="btn-primary"),
+        ),
+        ui.output_plot("wealth_dist"),
+        ui.output_text_verbatim("stats"),
+    ),
+)
+
+def server(input, output, session):
+    @reactive.calc
+    @reactive.event(input.run_sim)
+    def run_simulation():
+        pop_size = input.population()
+        initial = input.initial_units()
+        num_days = input.days()
+        num_runs = input.runs()
+        firm_prob = input.firm_prob() / 100
+        startup_cap = input.startup_capital()
+        interest = input.interest_rate() / 100
+        wage = input.wage_rate()
+        workers_needed = input.workers_per_firm()
+        price = input.good_price()
+
+        all_results = []
+
+        for run in range(num_runs):
+            wealth = np.full(pop_size, float(initial))
+            employed_by = np.full(pop_size, -1)  # -1 = unemployed
+            firms = []  # list of dicts
+            total_firms_created = 0
+            total_firms_failed = 0
+
+            for day in range(num_days):
+                # 1. Firm formation
+                for i in range(pop_size):
+                    if employed_by[i] == -1 and np.random.random() < firm_prob:
+                        # Find potential lenders (people with enough wealth, not this person)
+                        potential_lenders = np.where((wealth >= startup_cap) & (np.arange(pop_size) != i))[0]
+                        if len(potential_lenders) > 0:
+                            lender = np.random.choice(potential_lenders)
+                            # Create firm
+                            wealth[lender] -= startup_cap
+                            firm = {
+                                'owner': i,
+                                'lender': lender,
+                                'debt': startup_cap,
+                                'workers': [],
+                                'active': True
+                            }
+                            # Hire workers
+                            unemployed = np.where(employed_by == -1)[0]
+                            unemployed = unemployed[unemployed != i]  # owner can't be worker
+                            if len(unemployed) >= workers_needed:
+                                hired = np.random.choice(unemployed, workers_needed, replace=False)
+                                firm['workers'] = list(hired)
+                                for w in hired:
+                                    employed_by[w] = len(firms)
+                            firms.append(firm)
+                            total_firms_created += 1
+
+                # 2. Production & wages (active firms)
+                for firm_id, firm in enumerate(firms):
+                    if not firm['active']:
+                        continue
+                    # Pay wages to workers
+                    total_wages = wage * len(firm['workers'])
+                    for w in firm['workers']:
+                        wealth[w] += wage
+
+                # 3. Consumption - everyone tries to buy 1 good if affordable
+                total_revenue = 0
+                active_firms = [f for f in firms if f['active']]
+                if len(active_firms) > 0:
+                    for i in range(pop_size):
+                        if wealth[i] >= price:
+                            wealth[i] -= price
+                            total_revenue += price
+                    # Distribute revenue equally among active firms
+                    revenue_per_firm = total_revenue / len(active_firms)
+                else:
+                    revenue_per_firm = 0
+
+                # 4. Debt service & profit calculation
+                for firm_id, firm in enumerate(firms):
+                    if not firm['active']:
+                        continue
+
+                    interest_payment = firm['debt'] * interest
+                    total_wages = wage * len(firm['workers'])
+                    profit = revenue_per_firm - total_wages - interest_payment
+
+                    # Pay interest to lender
+                    wealth[firm['lender']] += interest_payment
+
+                    # Owner gets profit (or covers loss)
+                    wealth[firm['owner']] += profit
+
+                    # 5. Check for failure
+                    if wealth[firm['owner']] < 0:
+                        # Firm fails
+                        firm['active'] = False
+                        total_firms_failed += 1
+                        # Workers become unemployed
+                        for w in firm['workers']:
+                            employed_by[w] = -1
+                        firm['workers'] = []
+                        # Lender loses remaining debt (already lost principal)
+                        # Owner's negative wealth stays (debt)
+
+            # Calculate final stats
+            gini = (np.sum(np.abs(np.subtract.outer(wealth, wealth))) /
+                    (2 * len(wealth)**2 * max(np.mean(wealth), 0.001)))
+
+            unemployed_count = np.sum(employed_by == -1)
+            active_firm_count = sum(1 for f in firms if f['active'])
+
+            all_results.append({
+                'wealth': np.sort(wealth.copy()),
+                'gini': gini,
+                'firms_created': total_firms_created,
+                'firms_failed': total_firms_failed,
+                'active_firms': active_firm_count,
+                'unemployment': unemployed_count / pop_size
+            })
+
+        return all_results
+
+    @output
+    @render.plot
+    def wealth_dist():
+        results = run_simulation()
+        if results is None:
+            return None
+
+        populations = np.array([r['wealth'] for r in results])
+        fig, ax = plt.subplots(figsize=(8, 5))
+
+        x = np.arange(1, populations.shape[1] + 1)
+        mean_wealth = np.mean(populations, axis=0)
+        min_wealth = np.min(populations, axis=0)
+        max_wealth = np.max(populations, axis=0)
+
+        ax.fill_between(x, min_wealth, max_wealth,
+                        alpha=0.3, color='seagreen', label='Min-Max range')
+        ax.plot(x, mean_wealth, color='seagreen', linewidth=2, marker='o',
+                markersize=4, label='Mean')
+
+        ax.set_xlabel('Person (sorted by wealth)')
+        ax.set_ylabel('Wealth')
+        ax.set_title('Final Wealth Distribution (mean with min-max range)')
+        ax.set_xlim(0, populations.shape[1] + 1)
+        ax.legend()
+        return fig
+
+    @output
+    @render.text
+    def stats():
+        results = run_simulation()
+        if results is None:
+            return "Click 'Run Simulation' to start"
+
+        ginis = [r['gini'] for r in results]
+        firms_created = np.mean([r['firms_created'] for r in results])
+        firms_failed = np.mean([r['firms_failed'] for r in results])
+        active_firms = np.mean([r['active_firms'] for r in results])
+        unemployment = np.mean([r['unemployment'] for r in results])
+        total_wealth = np.mean([np.sum(r['wealth']) for r in results])
+
+        return (f"Mean Gini:        {np.mean(ginis):.3f}\n"
+                f"Total Wealth:     {total_wealth:.0f}\n"
+                f"Firms Created:    {firms_created:.1f}\n"
+                f"Firms Failed:     {firms_failed:.1f}\n"
+                f"Active Firms:     {active_firms:.1f}\n"
+                f"Unemployment:     {unemployment:.1%}")
+
+app = App(app_ui, server)
+```
+
+### Why Firms Create Different Dynamics
+
+The firm-based model introduces **structural roles** that fundamentally change how wealth flows through the economy.
+
+**Three Wealth Channels**
+
+Each role has a different relationship to the economy's cash flows:
+
+| Role | Income Source | Risk Profile |
+|------|--------------|--------------|
+| Worker | Wages ($w$ per day) | Low variance, but vulnerable to unemployment |
+| Lender | Interest ($r \times K$) | Steady returns, but risk of default |
+| Entrepreneur | Profit ($\pi = R - wN - rK$) | High variance—can gain or lose substantially |
+
+**The Profitability Condition**
+
+A firm is profitable when revenue exceeds costs:
+
+$$\pi = \underbrace{P \times Q}_{\text{Revenue}} - \underbrace{w \times N}_{\text{Wages}} - \underbrace{r \times K}_{\text{Interest}} > 0$$
+
+where $P$ is price, $Q$ is quantity sold, $w$ is wage, $N$ is workers, $r$ is interest rate, and $K$ is capital.
+
+Rearranging, a firm survives when:
+
+$$\frac{P \times Q}{N} > w + \frac{r \times K}{N}$$
+
+This is revenue per worker exceeding wage plus capital cost per worker. When this fails, entrepreneurs absorb losses until bankruptcy.
+
+**Unemployment as an Absorbing State**
+
+Unlike the yard sale model where zero wealth is the trap, here **unemployment** creates a similar dynamic. Workers who lose jobs:
+
+- Stop earning wages
+- Deplete savings buying goods
+- Can only escape if a new firm hires them
+
+This creates **path dependence**: early firm failures can cascade as unemployed workers can't buy goods, reducing revenue for remaining firms.
+
+**Who Wins?**
+
+The model reveals a tension:
+- **High wages** benefit workers but squeeze profits, causing firm failures
+- **High interest** benefits lenders but also squeezes profits
+- **High prices** benefit firms but reduce demand if people can't afford goods
+
+The "optimal" parameters depend on whose perspective you take—there's no configuration where everyone wins equally.
+
+## Comparing All Three Models
+
+| Aspect | Yard Sale | Growing Economy | Economy with Firms |
+|--------|-----------|-----------------|-------------------|
+| Wealth creation | None (fixed total) | Labor income + capital returns | Wages + profits + interest |
+| Inequality driver | Random chance | Capital compounds faster | Entrepreneurs vs workers |
+| Poverty floor | None (can hit zero) | Labor income provides floor | Unemployment risk |
+| Key insight | Inequality from pure randomness | Growth doesn't prevent inequality | Roles determine outcomes |
+
+**Experiments to try:**
+
+1. **Firm probability = 0%**: No firms form, wealth stays constant (like closed model)
+2. **High interest, low wages**: Lenders get rich, workers struggle, many firm failures
+3. **Low interest, high wages**: Workers prosper, entrepreneurs may struggle to profit
+4. **High startup capital**: Fewer firms form, concentrated ownership among the wealthy
